@@ -37,7 +37,7 @@ def preprocess_image(image):
     ground_truth = tf.cast(ground_truth, tf.float32)
     ground_truth /= 255.0
 
-    downsampled = tf.image.resize_images(ground_truth, [16, 16])
+    downsampled = tf.image.resize_images(ground_truth, [16, 16], method=tf.image.ResizeMethod.AREA)
     lowres = tf.image.resize_images(downsampled, [32, 32], method=tf.image.ResizeMethod.BICUBIC)
     #lowres /= 255.0
 
@@ -46,7 +46,10 @@ def preprocess_image(image):
 
 def input_dataset(dataset_list, batch_size):
     dataset = tf.data.Dataset.from_tensor_slices(dataset_list)
-    dataset = dataset.map(preprocess_image, num_parallel_calls=4)
+    dataset = dataset.map(preprocess_image, num_parallel_calls=12)
+
+    dataset = dataset.cache(filename='./cache.tf-data')
+    
     dataset = dataset.shuffle(buffer_size=len(dataset_list))
     dataset = dataset.batch(batch_size)
     dataset = dataset.prefetch(1)
@@ -97,7 +100,7 @@ def model(inputs, training):
         psnr = tf.reduce_mean(tf.image.psnr(output, ground_truth, 1.0))
 
         if training == True:
-            optimizer = tf.train.AdamOptimizer(learning_rate=0.01)
+            optimizer = tf.train.AdamOptimizer(learning_rate=0.001)
             training_op = optimizer.minimize(loss)
 
         # For tensorboard summary
@@ -128,23 +131,30 @@ def train(train_spec, test_spec, n_epoch):
     logdir = "{}/run-{}/".format(root_logdir, now)
 
     init = tf.global_variables_initializer()
-    #saver = tf.train.Saver()
+    saver = tf.train.Saver()
     
     file_writer = tf.summary.FileWriter(logdir, tf.get_default_graph())
 
     with tf.Session() as sess:
         sess.run(init)
         
+        best_accuracy = 0.0
+
         for epoch in range(n_epoch):
             sess.run(train_spec['iterator_init_op'])
             
-            if epoch % 5 == 0:
+            if epoch % 10 == 0:
                 _, loss, accuracy, summary = sess.run([train_spec['train_op'], train_spec['loss'], train_spec['accuracy'], train_spec['summary_op']])
                 file_writer.add_summary(summary, global_step=epoch)
             else:
                 _, loss, accuracy = sess.run([train_spec['train_op'], train_spec['loss'], train_spec['accuracy']])
             print('epoch #{} PSNR:{}'.format(epoch, accuracy))
+
+            if best_accuracy < accuracy:
+                best_accuracy = accuracy
+                save_path = saver.save(sess, 'tmp/model.ckpt')
         
+        saver.restore(sess, 'tmp/model.ckpt')
         sess.run(test_spec['iterator_init_op'])
         test_loss, test_accuracy = sess.run([test_spec['loss'], test_spec['accuracy']])
         print('TEST PSNR: {}'.format(test_accuracy))
@@ -153,13 +163,16 @@ def train(train_spec, test_spec, n_epoch):
 
 
 if __name__ == '__main__':
-    n_epoch = 100
+    n_epoch = 1000
     batch_size = 128
     
     image_paths = load_images('SR_dataset/291')
 
     # Create two dataset (input data pipeline with image paths)
     train_paths, test_paths = split_train_test(image_paths, 0.8)
+
+    time_fmt = '%H:%M:%S'
+    present = datetime.now().strftime(time_fmt)
 
     # Create two iterators over the two datasets
     train_inputs = input_dataset(train_paths, batch_size)
@@ -171,3 +184,8 @@ if __name__ == '__main__':
 
     # Train the model
     train(train_spec, test_spec, n_epoch)
+
+    now = datetime.now().strftime(time_fmt)
+
+    elapsed_time = datetime.strptime(now, time_fmt) - datetime.strptime(present, time_fmt)
+    print('Elapsed time: ', elapsed_time)
