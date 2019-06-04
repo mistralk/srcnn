@@ -26,11 +26,14 @@ def split_train_test(dataset_list, train_set_ratio):
     
 def preprocess_image(image):
     image = tf.read_file(image)
+    image = tf.image.decode_image(image, channels=3)
+    '''
     image = tf.cond(
         tf.image.is_jpeg(image),
         lambda: tf.image.decode_jpeg(image, channels=3),
         lambda: tf.image.decode_bmp(image, channels=3))
-    
+    '''
+
     grayscaled = tf.image.rgb_to_grayscale(image)
 
     ground_truth = tf.image.random_crop(grayscaled, [32, 32, 1])
@@ -49,7 +52,7 @@ def input_dataset(dataset_list, batch_size):
     dataset = dataset.map(preprocess_image, num_parallel_calls=12)
 
     dataset = dataset.cache(filename='./cache.tf-data')
-    
+
     dataset = dataset.shuffle(buffer_size=len(dataset_list))
     dataset = dataset.batch(batch_size)
     dataset = dataset.prefetch(1)
@@ -120,6 +123,7 @@ def model(inputs, training):
         if training == True:
             spec['train_op'] = training_op
 
+        print(tf.trainable_variables('model'))
         return spec
 
 
@@ -138,23 +142,43 @@ def train(train_spec, test_spec, n_epoch):
     with tf.Session() as sess:
         sess.run(init)
         
-        best_accuracy = 0.0
+        best_accuracy = -99999.0
 
+        # Training
         for epoch in range(n_epoch):
             sess.run(train_spec['iterator_init_op'])
             
             if epoch % 10 == 0:
                 _, loss, accuracy, summary = sess.run([train_spec['train_op'], train_spec['loss'], train_spec['accuracy'], train_spec['summary_op']])
                 file_writer.add_summary(summary, global_step=epoch)
+    
+                if best_accuracy < accuracy:
+                    best_accuracy = accuracy
+                    save_path = saver.save(sess, 'tmp/model.ckpt')
             else:
                 _, loss, accuracy = sess.run([train_spec['train_op'], train_spec['loss'], train_spec['accuracy']])
             print('epoch #{} PSNR:{}'.format(epoch, accuracy))
 
-            if best_accuracy < accuracy:
-                best_accuracy = accuracy
-                save_path = saver.save(sess, 'tmp/model.ckpt')
-        
+        # Test
         saver.restore(sess, 'tmp/model.ckpt')
+
+        # Get parameter from tf variables
+        default_graph = tf.get_default_graph()
+        conv1_kernel = default_graph.get_tensor_by_name('model/conv1/kernel:0').eval()
+        conv1_bias = default_graph.get_tensor_by_name('model/conv1/bias:0').eval()
+        conv2_kernel = default_graph.get_tensor_by_name('model/conv2/kernel:0').eval()
+        conv2_bias = default_graph.get_tensor_by_name('model/conv2/bias:0').eval()
+        conv3_kernel = default_graph.get_tensor_by_name('model/conv3/kernel:0').eval()
+        conv3_bias = default_graph.get_tensor_by_name('model/conv3/bias:0').eval()
+
+        # Save parameters as numpy array
+        np.save("conv1_kernel", conv1_kernel)
+        np.save("conv1_bias", conv1_bias)
+        np.save("conv2_kernel", conv2_kernel)
+        np.save("conv2_bias", conv2_bias)
+        np.save("conv3_kernel", conv3_kernel)
+        np.save("conv3_bias", conv3_bias)
+
         sess.run(test_spec['iterator_init_op'])
         test_loss, test_accuracy = sess.run([test_spec['loss'], test_spec['accuracy']])
         print('TEST PSNR: {}'.format(test_accuracy))
@@ -162,8 +186,32 @@ def train(train_spec, test_spec, n_epoch):
     file_writer.close()
 
 
+def reuse_model(model_path, model_spec):
+    init = tf.global_variables_initializer()
+    saver = tf.train.Saver()
+
+    #file_writer = tf.summary.FileWriter(logdir, tf.get_default_graph())
+    
+    with tf.Session() as sess:
+        sess.run(init)
+        saver.restore(sess, model_path)
+        sess.run(model_spec['iterator_init_op'])
+        loss, accuracy = sess.run([model_spec['loss'], model_spec['accuracy']])
+        print('------')
+        print('Result')
+        print('------')
+        print('Set5 loss: {}'.format(loss))
+        print('Set5 PSNR: {}'.format(accuracy))
+
+    #file_writer.close()
+
+
 if __name__ == '__main__':
-    n_epoch = 1000
+    # TODO: command line interface
+    # python srcnn --train --dataset="" --epoch=""
+    # python srcnn --eval --dataset="" --model=""
+
+    n_epoch = 10
     batch_size = 128
     
     image_paths = load_images('SR_dataset/291')
@@ -173,7 +221,7 @@ if __name__ == '__main__':
 
     time_fmt = '%H:%M:%S'
     present = datetime.now().strftime(time_fmt)
-
+    
     # Create two iterators over the two datasets
     train_inputs = input_dataset(train_paths, batch_size)
     test_inputs = input_dataset(test_paths, len(test_paths))
@@ -184,7 +232,13 @@ if __name__ == '__main__':
 
     # Train the model
     train(train_spec, test_spec, n_epoch)
-
+    '''
+    # Final validation by set5
+    set5_paths = load_images('SR_dataset/Set5')
+    set5_inputs = input_dataset(set5_paths, len(set5_paths))
+    set5_spec = model(set5_inputs, training=False)
+    reuse_model('tmp/model100.ckpt', set5_spec)
+    '''
     now = datetime.now().strftime(time_fmt)
 
     elapsed_time = datetime.strptime(now, time_fmt) - datetime.strptime(present, time_fmt)
