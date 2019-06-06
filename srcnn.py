@@ -1,8 +1,13 @@
 import numpy as np
 import tensorflow as tf
 import pathlib
-
+import os
+import imageio
 from datetime import datetime
+
+# Ignore warnings
+tf.logging.set_verbosity(tf.logging.ERROR)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 
 def load_images(root_path):
@@ -24,15 +29,9 @@ def split_train_test(dataset_list, train_set_ratio):
     return train_set, test_set
 
     
-def preprocess_image(image):
+def preprocess_image_train(image):
     image = tf.read_file(image)
     image = tf.image.decode_image(image, channels=3)
-    '''
-    image = tf.cond(
-        tf.image.is_jpeg(image),
-        lambda: tf.image.decode_jpeg(image, channels=3),
-        lambda: tf.image.decode_bmp(image, channels=3))
-    '''
 
     grayscaled = tf.image.rgb_to_grayscale(image)
 
@@ -42,18 +41,42 @@ def preprocess_image(image):
 
     downsampled = tf.image.resize_images(ground_truth, [16, 16], method=tf.image.ResizeMethod.AREA)
     lowres = tf.image.resize_images(downsampled, [32, 32], method=tf.image.ResizeMethod.BICUBIC)
-    #lowres /= 255.0
 
     return (lowres, ground_truth)
 
+'''
+def preprocess_image(image):
+    image = tf.read_file(image)
+    image = tf.image.decode_image(image, channels=3)
+    image.set_shape([None, None, 3])
 
-def input_dataset(dataset_list, batch_size):
+    grayscaled = tf.image.rgb_to_grayscale(image)
+
+    ground_truth = tf.cast(grayscaled, tf.float32)
+    ground_truth /= 255.0
+
+    img_shape = tf.shape(image)
+    height, width = img_shape[0], img_shape[1]
+    down_height = tf.to_int32(height/2)
+    down_width = tf.to_int32(width/2)
+
+    downsampled = tf.image.resize_images(ground_truth, [down_height, down_width], method=tf.image.ResizeMethod.AREA)
+    lowres = tf.image.resize_images(downsampled, [height, width], method=tf.image.ResizeMethod.BICUBIC)
+
+    return (lowres, ground_truth)
+'''
+
+def input_dataset(dataset_list, batch_size, training=False):
     dataset = tf.data.Dataset.from_tensor_slices(dataset_list)
-    dataset = dataset.map(preprocess_image, num_parallel_calls=12)
 
-    dataset = dataset.cache(filename='./cache.tf-data')
-
+    if training == True:
+        dataset = dataset.map(preprocess_image_train, num_parallel_calls=12)
+    '''
+    else:
+        dataset = dataset.map(preprocess_image, num_parallel_calls=12)
+    '''
     dataset = dataset.shuffle(buffer_size=len(dataset_list))
+    dataset = dataset.repeat(batch_size)
     dataset = dataset.batch(batch_size)
     dataset = dataset.prefetch(1)
 
@@ -71,7 +94,7 @@ def input_dataset(dataset_list, batch_size):
     return inputs
 
 
-def model(inputs, training):
+def model(inputs, training=False):
     with tf.variable_scope('model', reuse=tf.AUTO_REUSE):
         lowres = inputs['lowres']
         ground_truth = inputs['ground_truth']
@@ -104,18 +127,20 @@ def model(inputs, training):
 
         if training == True:
             optimizer = tf.train.AdamOptimizer(learning_rate=0.001)
-            training_op = optimizer.minimize(loss)
+            global_step = tf.train.get_or_create_global_step()
+            training_op = optimizer.minimize(loss, global_step=global_step)
 
         # For tensorboard summary
         loss_summary = tf.summary.scalar('loss', loss)
         psnr_summary = tf.summary.scalar('PSNR', psnr)
         
-        img_gt_summary = tf.summary.image("ground truth", ground_truth, max_outputs=1)
-        img_output_summary = tf.summary.image("SR result", output, max_outputs=1)
-        img_input_summary = tf.summary.image("lowres input", lowres, max_outputs=1)
+        img_gt_summary = tf.summary.image("ground truth", ground_truth, max_outputs=3)
+        img_output_summary = tf.summary.image("SR result", output, max_outputs=3)
+        img_input_summary = tf.summary.image("lowres input", lowres, max_outputs=3)
 
         # Save the model specification
         spec = inputs
+        spec['output'] = output
         spec['loss'] = loss
         spec['accuracy'] = psnr
         spec['summary_op'] = tf.summary.merge_all()
@@ -123,7 +148,6 @@ def model(inputs, training):
         if training == True:
             spec['train_op'] = training_op
 
-        print(tf.trainable_variables('model'))
         return spec
 
 
@@ -135,8 +159,22 @@ def train(train_spec, test_spec, n_epoch):
     logdir = "{}/run-{}/".format(root_logdir, now)
 
     init = tf.global_variables_initializer()
+    '''
+    default_graph = tf.get_default_graph()
+    conv1_kernel = default_graph.get_tensor_by_name('model/conv1/kernel:0')
+    conv1_bias = default_graph.get_tensor_by_name('model/conv1/bias:0')
+    conv2_kernel = default_graph.get_tensor_by_name('model/conv2/kernel:0')
+    conv2_bias = default_graph.get_tensor_by_name('model/conv2/bias:0')
+    conv3_kernel = default_graph.get_tensor_by_name('model/conv3/kernel:0')
+    conv3_bias = default_graph.get_tensor_by_name('model/conv3/bias:0')
+    saver = tf.train.Saver({'conv1_kernel': conv1_kernel,
+                            'conv1_bias': conv1_bias,
+                            'conv2_kernel': conv2_kernel,
+                            'conv2_bias': conv2_bias,
+                            'conv3_kernel': conv3_kernel,
+                            'conv3_bias': conv3_bias})
+    '''
     saver = tf.train.Saver()
-    
     file_writer = tf.summary.FileWriter(logdir, tf.get_default_graph())
 
     with tf.Session() as sess:
@@ -147,10 +185,11 @@ def train(train_spec, test_spec, n_epoch):
         # Training
         for epoch in range(n_epoch):
             sess.run(train_spec['iterator_init_op'])
-            
-            if epoch % 10 == 0:
-                _, loss, accuracy, summary = sess.run([train_spec['train_op'], train_spec['loss'], train_spec['accuracy'], train_spec['summary_op']])
-                file_writer.add_summary(summary, global_step=epoch)
+
+            if epoch % 1 == 0:
+                
+                _, loss, accuracy, summary, global_step = sess.run([train_spec['train_op'], train_spec['loss'], train_spec['accuracy'], train_spec['summary_op'], tf.train.get_global_step()])
+                file_writer.add_summary(summary, global_step=global_step)
     
                 if best_accuracy < accuracy:
                     best_accuracy = accuracy
@@ -178,32 +217,62 @@ def train(train_spec, test_spec, n_epoch):
         np.save("conv2_bias", conv2_bias)
         np.save("conv3_kernel", conv3_kernel)
         np.save("conv3_bias", conv3_bias)
-
+        
         sess.run(test_spec['iterator_init_op'])
         test_loss, test_accuracy = sess.run([test_spec['loss'], test_spec['accuracy']])
-        print('TEST PSNR: {}'.format(test_accuracy))
+        print('------')
+        print('Result')
+        print('------')
+        print('Test set loss: {}'.format(test_loss))
+        print('Test set PSNR: {}'.format(test_accuracy))
 
     file_writer.close()
 
 
 def reuse_model(model_path, model_spec):
-    init = tf.global_variables_initializer()
-    saver = tf.train.Saver()
+    # Logging path
+    now = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    root_logdir = "logs"
+    logdir = "{}/valid-{}/".format(root_logdir, now)
 
-    #file_writer = tf.summary.FileWriter(logdir, tf.get_default_graph())
+    # Initialize
+    #init = tf.global_variables_initializer()
+    #saver = tf.train.Saver()
+    saver = tf.train.Saver()
+    file_writer = tf.summary.FileWriter(logdir, tf.get_default_graph())
     
     with tf.Session() as sess:
-        sess.run(init)
+        #sess.run(init)
         saver.restore(sess, model_path)
         sess.run(model_spec['iterator_init_op'])
-        loss, accuracy = sess.run([model_spec['loss'], model_spec['accuracy']])
+        cnt = 0
+        while True:
+            try:
+                lw, gt, output, loss, accuracy = sess.run([model_spec['lowres'], model_spec['ground_truth'], model_spec['output'], model_spec['loss'], model_spec['accuracy']])
+                print(accuracy)
+
+                imageio.imwrite(str(cnt) + '_lowres.png', lw[0])
+                imageio.imwrite(str(cnt) + '_gt.png', gt[0])
+                imageio.imwrite(str(cnt) + '_output.png', output[0])
+                cnt = cnt + 1
+
+            except tf.errors.OutOfRangeError:
+                break
+
+        '''
+        파악된 문제점
+        1. 과거 저장된 트레이닝 set (약 230개)을 그대로 input으로 이용하고 있음 (예: 우주비행사 머리)
+        '''
+
+        #file_writer.add_summary(summary, global_step=epoch)
+
         print('------')
         print('Result')
         print('------')
         print('Set5 loss: {}'.format(loss))
         print('Set5 PSNR: {}'.format(accuracy))
 
-    #file_writer.close()
+    file_writer.close()
 
 
 if __name__ == '__main__':
@@ -223,8 +292,8 @@ if __name__ == '__main__':
     present = datetime.now().strftime(time_fmt)
     
     # Create two iterators over the two datasets
-    train_inputs = input_dataset(train_paths, batch_size)
-    test_inputs = input_dataset(test_paths, len(test_paths))
+    train_inputs = input_dataset(train_paths, batch_size, training=True)
+    test_inputs = input_dataset(test_paths, len(test_paths), training=True)
 
     # Define the model and save two model specifications for train and test
     train_spec = model(train_inputs, training=True)
@@ -232,13 +301,13 @@ if __name__ == '__main__':
 
     # Train the model
     train(train_spec, test_spec, n_epoch)
-    '''
+    
     # Final validation by set5
     set5_paths = load_images('SR_dataset/Set5')
-    set5_inputs = input_dataset(set5_paths, len(set5_paths))
+    set5_inputs = input_dataset(set5_paths, len(set5_paths), training=True)
     set5_spec = model(set5_inputs, training=False)
     reuse_model('tmp/model100.ckpt', set5_spec)
-    '''
+    
     now = datetime.now().strftime(time_fmt)
 
     elapsed_time = datetime.strptime(now, time_fmt) - datetime.strptime(present, time_fmt)
