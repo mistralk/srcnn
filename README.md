@@ -2,6 +2,12 @@
 * SRCNN tensorflow implementation
 * Hanyang University ITE4053 Deep Learning Methods and Applications assignment #1
 
+## Result
+![metric](./metric.png)
+![result](./result.png)
+* Set5 loss: 0.0004277987754903734
+* Set5 PSNR: 34.9572868347168
+
 ## Requirements
 * Python 3.6+
 * TensorFlow 1.13
