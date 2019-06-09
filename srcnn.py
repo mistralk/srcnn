@@ -236,7 +236,7 @@ def test_Set5():
 if __name__ == '__main__':
     # TODO: command line interface
 
-    n_epoch = 10
+    n_epoch = 10000
     batch_size = 128
     
     # Create two dataset (input data pipeline with image paths)
