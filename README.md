@@ -17,7 +17,7 @@
 
 ## References
 * Original paper
- * [Image Super-Resolution Using Deep Convolutional Networks](https://arxiv.org/abs/1501.00092)
+    * [Image Super-Resolution Using Deep Convolutional Networks](https://arxiv.org/abs/1501.00092)
 * My program architecture is inspired by the tutorials and examples of Stanford cs230
- * https://github.com/cs230-stanford/cs230-code-examples
- * https://cs230-stanford.github.io/tensorflow-input-data.html
+    * https://github.com/cs230-stanford/cs230-code-examples
+    * https://cs230-stanford.github.io/tensorflow-input-data.html

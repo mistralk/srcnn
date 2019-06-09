@@ -54,7 +54,7 @@ def input_dataset(dataset_list, batch_size):
 
     dataset = dataset.map(preprocess_image, num_parallel_calls=12)
     dataset = dataset.shuffle(buffer_size=dataset_length)
-    dataset = dataset.repeat(batch_size)
+    dataset = dataset.repeat()
     dataset = dataset.batch(batch_size)
     dataset = dataset.prefetch(1)
 
@@ -113,9 +113,9 @@ def model(inputs, training=False):
             loss_summary = tf.summary.scalar('loss', loss)
             psnr_summary = tf.summary.scalar('PSNR', psnr)
             
-            img_gt_summary = tf.summary.image("ground truth", ground_truth, max_outputs=3)
-            img_output_summary = tf.summary.image("SR result", output, max_outputs=3)
-            img_input_summary = tf.summary.image("lowres input", lowres, max_outputs=3)
+            img_gt_summary = tf.summary.image("ground truth", ground_truth, max_outputs=1)
+            img_output_summary = tf.summary.image("SR result", output, max_outputs=1)
+            img_input_summary = tf.summary.image("lowres input", lowres, max_outputs=1)
 
         # Save the model specification
         spec = inputs
@@ -200,14 +200,7 @@ def train_and_test(train_spec, test_spec, n_epoch):
 
 
 def reuse_model(model_path, model_spec):
-    # Logging path
-    now = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    root_logdir = "logs"
-    logdir = "{}/valid-{}/".format(root_logdir, now)
-
-    # Initialize
     saver = tf.train.Saver()
-    file_writer = tf.summary.FileWriter(logdir, tf.get_default_graph())
 
     lw_images = model_spec['lowres']
     gt_images = model_spec['ground_truth']
@@ -232,8 +225,6 @@ def reuse_model(model_path, model_spec):
         print('Set5 PSNR: {}'.format(accuracy))
         print('------------------------------------')
 
-    file_writer.close()
-
 
 def test_Set5():
     set5_paths = load_images('SR_dataset/Set5')
@@ -245,7 +236,7 @@ def test_Set5():
 if __name__ == '__main__':
     # TODO: command line interface
 
-    n_epoch = 10000
+    n_epoch = 10
     batch_size = 128
     
     # Create two dataset (input data pipeline with image paths)
