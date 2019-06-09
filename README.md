@@ -3,8 +3,12 @@
 * Hanyang University ITE4053 Deep Learning Methods and Applications assignment #1
 
 ## Result
-![metric](./metric.png)
+### Trained model evaluation
+![eval](./metric.png)
+
+### Test by random cropped Set5 images
 ![result](./result.png)
+* Above image is a sample (ground truth-low resolution-SRCNN output)
 * Set5 loss: 0.0004277987754903734
 * Set5 PSNR: 34.9572868347168
 
@@ -14,7 +18,7 @@
 * NumPy
 * imageio
 
-## Detail
+## Assignment detail
 * 32x32x1 input (random cropped from original images)
 * 32x32x1 output
 * 3x3 kernel
